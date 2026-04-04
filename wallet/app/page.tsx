@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
 import { Spinner } from "@/components/Spinner";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Fingerprint } from "lucide-react";
 
 export default function AuthPage() {
   const { create, login, discoverPasskey, loading, error, account, storedAccounts } = useWallet();
@@ -32,7 +32,7 @@ export default function AuthPage() {
       {/* Brand — sits at 40% from top */}
       <div className="flex-[3] flex items-end justify-center pb-8">
         <div className="text-center animate-fade-up">
-          <h1 className="text-[40px] font-bold text-[#1a1a1a] tracking-tight">Cannes</h1>
+          <h1 className="text-[40px] font-bold text-[#1a1a1a] tracking-tight">CloakPay</h1>
           <p className="text-[#1a1a1a]/40 text-[15px] mt-2 font-medium">Private payments on Base</p>
         </div>
       </div>
@@ -59,9 +59,9 @@ export default function AuthPage() {
                 storedAccounts.length > 0 ? setMode("accounts") : discoverPasskey()
               }
               disabled={loading}
-              className="w-full h-[56px] rounded-full border-2 border-white/40 text-[#1a1a1a] text-[16px] font-semibold active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center"
+              className="w-full h-[56px] rounded-full border-2 border-white/40 text-[#1a1a1a] text-[16px] font-semibold active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
             >
-              {loading ? <Spinner size={18} /> : "Sign In"}
+              {loading ? <Spinner size={18} /> : <><Fingerprint size={18} className="text-[#1a1a1a]/50" /> Sign In</>}
             </button>
           </div>
         )}
@@ -115,9 +115,9 @@ export default function AuthPage() {
             <button
               onClick={() => discoverPasskey()}
               disabled={loading}
-              className="w-full h-[56px] rounded-full border-2 border-white/40 text-[#1a1a1a] text-[16px] font-semibold active:scale-[0.98] transition-all disabled:opacity-30 cursor-pointer"
+              className="w-full h-[56px] rounded-full border-2 border-white/40 text-[#1a1a1a] text-[16px] font-semibold active:scale-[0.98] transition-all disabled:opacity-30 cursor-pointer flex items-center justify-center gap-2"
             >
-              {loading ? <Spinner size={18} /> : "Use Another Passkey"}
+              {loading ? <Spinner size={18} /> : <><Fingerprint size={18} className="text-[#1a1a1a]/50" /> Import Passkey</>}
             </button>
             <button
               onClick={() => setMode("welcome")}

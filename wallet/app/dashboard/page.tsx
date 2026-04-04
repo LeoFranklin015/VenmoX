@@ -6,7 +6,8 @@ import { useWallet } from "@/lib/wallet-context";
 import { shortenAddress } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
 import { TxItem } from "@/components/TxItem";
-import { Copy, Check, Send, Zap, ArrowDownLeft, ChevronRight, ShieldCheck } from "lucide-react";
+import { Copy, Check, Send, Zap, ArrowDownLeft, ChevronRight, ShieldCheck, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 interface Balance {
   token: string; symbol: string; amount: string; formatted: string; network: string; type: string;
@@ -23,6 +24,7 @@ export default function DashboardHome() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [showReceive, setShowReceive] = useState(false);
 
   useEffect(() => {
     if (!address) return;
@@ -51,6 +53,10 @@ export default function DashboardHome() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  function openReceive() {
+    setShowReceive(true);
+  }
+
   const networkBalances = balances.filter((b) => b.network === network);
   const usdcBalance = networkBalances.find((b) => b.symbol === "USDC" && b.type === "onchain");
   const poolBalance = networkBalances.find((b) => b.type === "pool");
@@ -60,30 +66,30 @@ export default function DashboardHome() {
     <div className="flex flex-col max-w-lg mx-auto w-full px-4 pt-5 pb-4 safe-bottom">
       {/* Header */}
       <div className="flex items-center justify-between mb-6 animate-fade-up">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-mint/20 text-mint flex items-center justify-center text-[14px] font-bold">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-mint text-mint-text flex items-center justify-center text-[15px] font-bold shadow-[0_2px_8px_rgba(141,216,133,0.25)]">
             {username?.charAt(0).toUpperCase() ?? "?"}
           </div>
           <div>
-            <p className="text-[15px] font-semibold text-white leading-tight">{username}</p>
+            <p className="text-[16px] font-bold text-white leading-tight tracking-tight">{username}</p>
             <button
               onClick={copyAddress}
-              className="flex items-center gap-1 text-[11px] text-white/30 font-mono hover:text-white/50 transition-colors cursor-pointer mt-0.5"
+              className="flex items-center gap-1.5 text-[11px] text-white/35 font-mono hover:text-white/55 transition-colors cursor-pointer mt-0.5"
             >
               {shortenAddress(address, 5)}
-              {copied ? <Check size={10} /> : <Copy size={10} />}
+              {copied ? <Check size={10} className="text-mint" /> : <Copy size={10} />}
             </button>
           </div>
         </div>
         <button
           onClick={() => { logout(); router.replace("/"); }}
-          className="text-[12px] text-white/30 hover:text-white/50 transition-colors cursor-pointer"
+          className="text-[11px] text-white/30 hover:text-white/50 transition-colors cursor-pointer px-3 py-1.5 rounded-full bg-white/[0.06] hover:bg-white/[0.1]"
         >
           Sign out
         </button>
       </div>
 
-      {/* Balance Card — mint green like MetaWallet */}
+      {/* Balance Card */}
       <div className="bg-mint rounded-[24px] p-5 pb-6 mb-4 animate-scale-in">
         <div className="flex items-center justify-between mb-4">
           <p className="text-mint-text/60 text-[11px] font-semibold uppercase tracking-widest">
@@ -126,16 +132,45 @@ export default function DashboardHome() {
         )}
       </div>
 
-      {/* Action Buttons — dark cards like MetaWallet right panel */}
+      {/* Action Buttons */}
       <div className="grid grid-cols-2 gap-3 mb-6 stagger">
         {network === "testnet" ? (
           <ActionCard icon={<Send size={18} />} label="Send" sub="Privately" onClick={() => router.push("/dashboard/send")} />
         ) : (
           <ActionCard icon={<Zap size={18} />} label="Pay" sub="Merchant" onClick={() => router.push("/dashboard/pay")} />
         )}
-        <ActionCard icon={<ArrowDownLeft size={18} />} label="Receive" sub="USDC" onClick={copyAddress} secondary />
+        <ActionCard icon={<ArrowDownLeft size={18} />} label="Receive" sub="USDC" onClick={openReceive} secondary />
         <ActionCard icon={<ShieldCheck size={18} />} label="Subscriptions" sub="Manage" onClick={() => router.push("/dashboard/subscriptions")} secondary />
       </div>
+
+      {/* Receive Modal */}
+      {showReceive && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowReceive(false)}>
+          <div className="bg-card rounded-[24px] p-6 w-[320px] text-center space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div className="w-8" />
+              <p className="text-[16px] font-bold text-white">Receive USDC</p>
+              <button onClick={() => setShowReceive(false)} className="w-8 h-8 rounded-full bg-white/[0.06] flex items-center justify-center cursor-pointer hover:bg-white/[0.1]">
+                <X size={16} className="text-white/50" />
+              </button>
+            </div>
+            <div className="bg-white rounded-2xl p-4 inline-flex justify-center">
+              <QRCodeSVG
+                value={`ethereum:${address}@${network === "mainnet" ? 8453 : 84532}`}
+                size={240}
+                level="M"
+              />
+            </div>
+            <p className="text-[11px] text-white/25 font-mono break-all px-2">{address}</p>
+            <button
+              onClick={() => { copyAddress(); }}
+              className="w-full h-[46px] rounded-full bg-mint text-mint-text text-[14px] font-semibold cursor-pointer active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+            >
+              {copied ? <><Check size={14} /> Copied!</> : <><Copy size={14} /> Copy Address</>}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Recent Activity */}
       <div className="animate-fade-up" style={{ animationDelay: "200ms" }}>
