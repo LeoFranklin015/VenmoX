@@ -1,19 +1,22 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
-import { getPayClient } from "@/lib/walletconnect-pay";
+import { parsePaymentLink } from "@/lib/walletconnect/parseLink";
+import { QRScanner } from "@/components/QRScanner";
 import { Spinner } from "@/components/Spinner";
 import { formatTokenAmount } from "@/lib/format";
+import { ArrowLeft, ScanLine, Keyboard } from "lucide-react";
+
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 type PayStep =
-  | "input"
+  | "scan"
   | "fetching"
   | "collect_data"
   | "fund_burner"
   | "funding"
-  | "options"
   | "signing"
   | "confirming"
   | "success"
@@ -23,45 +26,58 @@ interface CollectField {
   id: string;
   name: string;
   required: boolean;
-  fieldType: "text" | "date" | "checkbox";
+  type?: string;
+  fieldType?: string;
 }
 
-const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+function decodeHexAction(hex: string) {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const json = Buffer.from(clean, "hex").toString("utf8");
+  return JSON.parse(json);
+}
 
 export default function PayPage() {
   const { account, address } = useWallet();
   const router = useRouter();
 
-  const [paymentLink, setPaymentLink] = useState("");
-  const [step, setStep] = useState<PayStep>("input");
-  const [paymentId, setPaymentId] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [paymentInfo, setPaymentInfo] = useState<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [options, setOptions] = useState<any[]>([]);
-  const [burnerAddress, setBurnerAddress] = useState<string | null>(null);
+  const [step, setStep] = useState<PayStep>("scan");
+  const [inputMode, setInputMode] = useState<"camera" | "paste">("camera");
+  const [pasteValue, setPasteValue] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [txResult, setTxResult] = useState<string | null>(null);
 
-  // Data collection state
+  // Payment state
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [paymentInfo, setPaymentInfo] = useState<any>(null);
+  const [burnerAddress, setBurnerAddress] = useState<string | null>(null);
+
+  // Collect data state
   const [collectFields, setCollectFields] = useState<CollectField[]>([]);
   const [collectValues, setCollectValues] = useState<Record<string, string>>({});
-  const [collectedData, setCollectedData] = useState<
-    { id: string; value: string }[] | null
-  >(null);
+
+  // Persist across steps
+  const pendingRef = useRef<{
+    paymentId: string;
+    paymentLink: string;
+    burnerAddress: string;
+    optionId: string | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    actions: any[] | null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    collectedData: any;
+  } | null>(null);
 
   function reset() {
-    setStep("input");
-    setPaymentLink("");
-    setPaymentId(null);
-    setPaymentInfo(null);
-    setOptions([]);
-    setBurnerAddress(null);
+    setStep("scan");
+    setInputMode("camera");
+    setPasteValue("");
     setError(null);
     setTxResult(null);
+    setPaymentInfo(null);
+    setBurnerAddress(null);
     setCollectFields([]);
     setCollectValues({});
-    setCollectedData(null);
+    pendingRef.current = null;
   }
 
   function getCaip10(addr: string) {
@@ -74,53 +90,68 @@ export default function PayPage() {
     ];
   }
 
-  // Step 1: Fetch payment info using main address, create burner
-  async function handleFetch() {
-    if (!paymentLink.trim() || !address) return;
-    setStep("fetching");
-    setError(null);
+  // Entry point — QR scan or paste
+  const handleScanOrPaste = useCallback(
+    async (raw: string) => {
+      if (!address) return;
+      setError(null);
 
-    try {
-      // First: fetch payment info using main address (just to get merchant info + collectData)
-      const client = getPayClient();
-      const infoResult = await client.getPaymentOptions({
-        paymentLink: paymentLink.trim(),
-        accounts: getCaip10(address),
-        includePaymentInfo: true,
-      });
-
-      console.log("[pay] Initial getPaymentOptions:", JSON.stringify(infoResult, null, 2));
-
-      setPaymentId(infoResult.paymentId);
-      setPaymentInfo(infoResult.info ?? null);
-
-      // Create burner wallet
-      const burnerRes = await fetch("/api/burner", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create", ownerAddress: address, token: "USDC", amount: "0" }),
-      });
-      const burnerData = await burnerRes.json();
-      if (burnerData.error) throw new Error(burnerData.error);
-      setBurnerAddress(burnerData.burnerAddress);
-
-      // Check for collectData (Travel Rule compliance)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const topCollect = (infoResult as any).collectData;
-      if (topCollect?.fields?.length > 0) {
-        setCollectFields(topCollect.fields);
-        setStep("collect_data");
-      } else {
-        setStep("fund_burner");
+      const parsed = parsePaymentLink(raw);
+      if (!parsed) {
+        setError("Invalid QR code or payment link");
+        return;
       }
-    } catch (e: unknown) {
-      console.error("[pay] handleFetch error:", e);
-      setError(e instanceof Error ? e.message : "Failed to fetch payment");
-      setStep("error");
-    }
-  }
 
-  // Submit identity data, then proceed to fund burner
+      const { paymentId } = parsed;
+      setStep("fetching");
+
+      try {
+        // Fetch payment info using main address
+        const optionsRes = await fetch("/api/pay/options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paymentId, accounts: getCaip10(address) }),
+        });
+        const optionsData = await optionsRes.json();
+        if (!optionsRes.ok) throw new Error(optionsData.error || "Failed to fetch payment");
+
+        setPaymentInfo(optionsData.info ?? null);
+
+        // Create burner wallet
+        const burnerRes = await fetch("/api/burner", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "create", ownerAddress: address, token: "USDC", amount: "0" }),
+        });
+        const burnerData = await burnerRes.json();
+        if (burnerData.error) throw new Error(burnerData.error);
+
+        setBurnerAddress(burnerData.burnerAddress);
+        pendingRef.current = {
+          paymentId,
+          paymentLink: raw.trim(),
+          burnerAddress: burnerData.burnerAddress,
+          optionId: null,
+          actions: null,
+          collectedData: null,
+        };
+
+        // Check collectData
+        const option = optionsData.options?.[0];
+        if (option?.collectData?.fields?.length > 0) {
+          setCollectFields(option.collectData.fields);
+          setStep("collect_data");
+        } else {
+          setStep("fund_burner");
+        }
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Failed to fetch payment");
+        setStep("error");
+      }
+    },
+    [address]
+  );
+
   function handleSubmitCollectData() {
     for (const field of collectFields) {
       if (field.required && !collectValues[field.id]?.trim()) {
@@ -130,32 +161,37 @@ export default function PayPage() {
     }
     setError(null);
 
-    const data = [
-      ...collectFields.map((f) => ({ id: f.id, value: collectValues[f.id] ?? "" })),
-      { id: "tosConfirmed", value: "true" },
-    ];
-    setCollectedData(data);
+    if (pendingRef.current) {
+      const fields = [
+        ...collectFields.map((f) => ({ ...f, value: collectValues[f.id] ?? "" })),
+        { type: "boolean", id: "tosConfirmed", name: "Terms of Service", required: true, value: "true" },
+      ];
+      pendingRef.current.collectedData = { fields };
+    }
     setStep("fund_burner");
   }
 
-  // Step 2: JAW sends USDC to burner, then re-fetch options
-  async function handleFundBurner() {
-    if (!account || !burnerAddress || !paymentInfo) return;
+  // Fund burner, re-fetch options, sign, confirm
+  async function handleFundAndPay() {
+    if (!account || !pendingRef.current || !paymentInfo) return;
     setStep("funding");
     setError(null);
 
     try {
+      const pending = pendingRef.current;
+
+      // Calculate USDC amount from payment info
       const amountValue = paymentInfo.amount?.value ?? "0";
       const decimals = paymentInfo.amount?.display?.decimals ?? 2;
       const padded = amountValue.padStart(decimals + 1, "0");
       const usdcWhole = padded.slice(0, -decimals) || "0";
       const usdcFrac = padded.slice(-decimals);
       const usdcFloat = parseFloat(`${usdcWhole}.${usdcFrac}`);
-
       const usdcRaw = BigInt(Math.ceil(usdcFloat * 1e6));
 
+      // JAW sends USDC to burner
       const selector = "0xa9059cbb";
-      const paddedTo = burnerAddress.slice(2).padStart(64, "0");
+      const paddedTo = pending.burnerAddress.slice(2).padStart(64, "0");
       const paddedAmt = usdcRaw.toString(16).padStart(64, "0");
       const calldata = `${selector}${paddedTo}${paddedAmt}` as `0x${string}`;
 
@@ -163,320 +199,343 @@ export default function PayPage() {
         { to: USDC_BASE as `0x${string}`, data: calldata },
       ]);
 
+      // Wait for confirmation
       await new Promise((r) => setTimeout(r, 10000));
 
       // Re-fetch options with burner address (now has USDC)
-      try {
-        const client = getPayClient();
-        const result = await client.getPaymentOptions({
-          paymentLink: paymentLink.trim(),
-          accounts: getCaip10(burnerAddress),
-          includePaymentInfo: true,
-        });
+      const optionsRes = await fetch("/api/pay/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paymentId: pending.paymentId,
+          accounts: getCaip10(pending.burnerAddress),
+        }),
+      });
+      const optionsData = await optionsRes.json();
+      if (!optionsRes.ok) throw new Error(optionsData.error || "No options after funding");
 
-        console.log("[pay] Re-fetch options:", JSON.stringify(result, null, 2));
-        setOptions(result.options ?? []);
+      const option = optionsData.options?.[0];
+      if (!option) throw new Error("No payment options available after funding");
 
-        if (result.options && result.options.length > 0) {
-          setStep("options");
-        } else {
-          setError("No payment options found. Funds may not have arrived yet.");
-          setStep("error");
+      // Decode hex-encoded actions from Gateway API
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const resolvedActions = option.actions.map((action: any) => {
+        if (action.type === "build" && action.data?.data) {
+          return decodeHexAction(action.data.data);
         }
-      } catch (refetchErr) {
-        console.error("[pay] Re-fetch options failed:", refetchErr);
-        setError("Failed to fetch options after funding. Try again.");
+        if (action.type === "walletRpc" && action.data) {
+          return typeof action.data === "string"
+            ? decodeHexAction(action.data)
+            : action.data;
+        }
+        return action;
+      });
+
+      pending.optionId = option.id;
+      pending.actions = resolvedActions;
+
+      // Sign with burner (server-side)
+      setStep("signing");
+
+      const signActions = resolvedActions.map((a: { chainId?: string; method?: string; params?: string }) => ({
+        walletRpc: {
+          chainId: a.chainId || "eip155:8453",
+          method: a.method || "eth_signTypedData_v4",
+          params: typeof a.params === "string" ? a.params : JSON.stringify(a.params),
+        },
+      }));
+
+      const signRes = await fetch("/api/burner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "sign",
+          ownerAddress: address,
+          burnerAddress: pending.burnerAddress,
+          actions: signActions,
+        }),
+      });
+      const signData = await signRes.json();
+      if (signData.error) throw new Error(signData.error);
+
+      // Confirm with Gateway API
+      setStep("confirming");
+
+      const results = signData.signatures.map((sig: string) => ({
+        type: "walletRpc",
+        data: [sig],
+      }));
+
+      const confirmRes = await fetch("/api/pay/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paymentId: pending.paymentId,
+          optionId: option.id,
+          results,
+          collectedData: pending.collectedData,
+        }),
+      });
+      let confirmData = await confirmRes.json();
+      if (!confirmRes.ok) throw new Error(confirmData.error || "Confirmation failed");
+
+      // Poll until final
+      while (!confirmData.isFinal) {
+        await new Promise((r) => setTimeout(r, confirmData.pollInMs || 2000));
+        const pollRes = await fetch("/api/pay/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            paymentId: pending.paymentId,
+            optionId: option.id,
+            results,
+            collectedData: pending.collectedData,
+          }),
+        });
+        confirmData = await pollRes.json();
+        if (!pollRes.ok) throw new Error(confirmData.error || "Polling failed");
+      }
+
+      if (confirmData.status === "succeeded") {
+        setTxResult(pending.paymentId);
+        setStep("success");
+      } else {
+        setError(`Payment ${confirmData.status}`);
         setStep("error");
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to fund burner");
+      setError(e instanceof Error ? e.message : "Payment failed");
       setStep("error");
     }
   }
 
-  // Step 3: Sign with burner + confirm (include collectedData)
-  const handleSelectOption = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (option: any) => {
-      if (!paymentId || !burnerAddress || !address) return;
-
-      // Check per-option collectData
-      if (!collectedData && option.collectData?.fields?.length > 0) {
-        setCollectFields(option.collectData.fields);
-        setStep("collect_data");
-        return;
-      }
-
-      setStep("signing");
-      setError(null);
-
-      try {
-        const client = getPayClient();
-
-        const actions = await client.getRequiredPaymentActions({
-          paymentId,
-          optionId: option.id,
-        });
-
-        console.log("[pay] Actions to sign:", actions.length);
-
-        // Server signs with burner key
-        const signRes = await fetch("/api/burner", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "sign",
-            ownerAddress: address,
-            burnerAddress,
-            actions,
-          }),
-        });
-        const signText = await signRes.text();
-        if (!signText) throw new Error(`Sign endpoint returned empty (${signRes.status})`);
-        const signData = JSON.parse(signText);
-        if (signData.error) throw new Error(signData.error);
-
-        const { signatures } = signData;
-        console.log("[pay] Got", signatures.length, "signatures");
-
-        // confirmPayment — include collectedData if we have it
-        setStep("confirming");
-        const confirmParams: {
-          paymentId: string;
-          optionId: string;
-          signatures: string[];
-          collectedData?: { id: string; value: string }[];
-        } = {
-          paymentId,
-          optionId: option.id,
-          signatures,
-        };
-        if (collectedData && collectedData.length > 0) {
-          confirmParams.collectedData = collectedData;
-        }
-
-        console.log("[pay] Confirm params:", JSON.stringify(confirmParams, null, 2));
-
-        let result = await client.confirmPayment(confirmParams);
-        console.log("[pay] Confirm:", result.status, "isFinal:", result.isFinal);
-
-        while (!result.isFinal && result.pollInMs) {
-          await new Promise((r) => setTimeout(r, result.pollInMs!));
-          result = await client.confirmPayment(confirmParams);
-        }
-
-        if (result.status === "succeeded") {
-          setTxResult(result.info?.txId ?? paymentId);
-          setStep("success");
-        } else {
-          setError(`Payment ${result.status}`);
-          setStep("error");
-        }
-      } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Payment failed");
-        setStep("error");
-      }
-    },
-    [paymentId, burnerAddress, address, collectedData, paymentLink]
-  );
-
   return (
-    <div className="flex flex-col px-5 pt-6 pb-4 space-y-6">
-      <div className="flex items-center justify-between">
-        <button onClick={() => router.back()} className="text-accent text-sm font-medium">
-          Back
+    <div className="flex flex-col flex-1 max-w-lg mx-auto w-full min-h-dvh"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 60px)" }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 pt-5 pb-3">
+        <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white/[0.06] flex items-center justify-center cursor-pointer hover:bg-white/[0.1] transition-colors">
+          <ArrowLeft size={18} className="text-white/60" />
         </button>
-        <h1 className="text-lg font-semibold">Pay Merchant</h1>
-        <div className="w-10" />
+        <p className="text-[16px] font-semibold text-white">Pay Merchant</p>
+        <div className="w-9" />
       </div>
 
-      {step === "input" && (
-        <div className="space-y-4">
-          <div className="rounded-2xl bg-card p-4 text-center">
-            <p className="text-xs text-secondary mb-1 uppercase tracking-wider">Mainnet</p>
-            <p className="text-tertiary text-xs">Base · Private Payment via WalletConnect</p>
+      {/* Scan / Paste */}
+      {step === "scan" && (
+        <div className="flex-1 flex flex-col px-5 space-y-4">
+          <div className="rounded-2xl bg-white/[0.04] p-3 text-center">
+            <p className="text-[11px] text-white/25 uppercase tracking-wider">Base Mainnet</p>
+            <p className="text-[12px] text-white/40 mt-0.5">Private Payment via WalletConnect</p>
           </div>
-          <input
-            type="text"
-            value={paymentLink}
-            onChange={(e) => setPaymentLink(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleFetch()}
-            placeholder="Paste payment link..."
-            className="w-full h-14 rounded-2xl bg-elevated border border-line px-4 text-primary font-mono text-sm placeholder:text-tertiary focus:outline-none focus:border-accent"
-          />
-          <button
-            onClick={handleFetch}
-            disabled={!paymentLink.trim()}
-            className="w-full h-14 rounded-2xl bg-accent text-white text-base font-semibold hover:bg-accent-hover transition-colors disabled:opacity-40"
-          >
-            Fetch Payment
-          </button>
+
+          {inputMode === "camera" ? (
+            <>
+              <p className="text-[13px] text-white/40 text-center">
+                Scan a WalletConnect Pay QR code
+              </p>
+              <div className="relative rounded-2xl overflow-hidden bg-black/40 aspect-square">
+                <QRScanner
+                  onScan={handleScanOrPaste}
+                  onError={(err) => setError(err)}
+                />
+                {/* Scanner overlay */}
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute inset-[15%] border-2 border-white/20 rounded-2xl" />
+                </div>
+              </div>
+              <button
+                onClick={() => setInputMode("paste")}
+                className="flex items-center justify-center gap-2 h-[46px] rounded-2xl bg-white/[0.06] text-white/50 text-[13px] font-medium cursor-pointer hover:bg-white/[0.1] transition-colors"
+              >
+                <Keyboard size={16} />
+                Paste link instead
+              </button>
+            </>
+          ) : (
+            <>
+              <input
+                type="text"
+                value={pasteValue}
+                onChange={(e) => setPasteValue(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && pasteValue.trim() && handleScanOrPaste(pasteValue)}
+                placeholder="Paste payment link..."
+                className="w-full h-[50px] rounded-2xl bg-white/[0.06] border border-white/5 px-4 text-[13px] text-white font-mono placeholder:text-white/20 focus:outline-none focus:border-mint/30 transition-colors"
+              />
+              <button
+                onClick={() => pasteValue.trim() && handleScanOrPaste(pasteValue)}
+                disabled={!pasteValue.trim()}
+                className="w-full h-[50px] rounded-2xl bg-mint text-mint-text text-[15px] font-semibold disabled:opacity-30 cursor-pointer"
+              >
+                Fetch Payment
+              </button>
+              <button
+                onClick={() => setInputMode("camera")}
+                className="flex items-center justify-center gap-2 h-[46px] rounded-2xl bg-white/[0.06] text-white/50 text-[13px] font-medium cursor-pointer hover:bg-white/[0.1] transition-colors"
+              >
+                <ScanLine size={16} />
+                Scan QR code instead
+              </button>
+            </>
+          )}
+
+          {error && (
+            <p className="text-center text-[13px] text-red-400">{error}</p>
+          )}
         </div>
       )}
 
-      {step === "fetching" && <CenterSpinner text="Fetching payment..." />}
+      {/* Fetching */}
+      {step === "fetching" && (
+        <div className="flex-1 flex flex-col items-center justify-center px-6 space-y-3">
+          <Spinner size={32} />
+          <p className="text-white/50 text-[14px]">Fetching payment...</p>
+        </div>
+      )}
 
-      {/* Identity Collection Form */}
+      {/* Collect Data */}
       {step === "collect_data" && (
-        <div className="space-y-4">
+        <div className="flex-1 flex flex-col px-5 space-y-4">
           {paymentInfo && (
-            <div className="flex items-center gap-3 p-4 rounded-2xl bg-elevated">
+            <div className="flex items-center gap-3 p-4 rounded-2xl bg-white/[0.04]">
               <div className="flex-1">
-                <p className="font-medium text-primary">{paymentInfo.merchant?.name ?? "Merchant"}</p>
-                <p className="text-xs text-tertiary">
+                <p className="font-medium text-white">{paymentInfo.merchant?.name ?? "Merchant"}</p>
+                <p className="text-[12px] text-white/35">
                   ${formatTokenAmount(paymentInfo.amount?.value ?? "0", paymentInfo.amount?.display?.decimals ?? 2)}
                 </p>
               </div>
             </div>
           )}
 
-          <div className="space-y-1">
-            <p className="font-medium text-primary">Identity Verification</p>
-            <p className="text-xs text-tertiary">Required for compliance before payment.</p>
+          <div>
+            <p className="font-medium text-white text-[15px]">Identity Verification</p>
+            <p className="text-[12px] text-white/35 mt-1">Required for compliance before payment.</p>
           </div>
 
           {collectFields.map((field) => (
             <div key={field.id}>
-              <label className="block text-xs text-secondary mb-1.5">
-                {field.name}{field.required && <span className="text-red ml-0.5">*</span>}
+              <label className="block text-[12px] text-white/50 mb-1.5">
+                {field.name}{field.required && <span className="text-red-400 ml-0.5">*</span>}
               </label>
-              {field.fieldType === "date" ? (
-                <input
-                  type="date"
-                  value={collectValues[field.id] ?? ""}
-                  onChange={(e) => setCollectValues((v) => ({ ...v, [field.id]: e.target.value }))}
-                  className="w-full h-12 rounded-2xl bg-elevated border border-line px-4 text-primary focus:outline-none focus:border-accent"
-                />
-              ) : (
-                <input
-                  type="text"
-                  value={collectValues[field.id] ?? ""}
-                  onChange={(e) => setCollectValues((v) => ({ ...v, [field.id]: e.target.value }))}
-                  placeholder={field.name}
-                  className="w-full h-12 rounded-2xl bg-elevated border border-line px-4 text-primary placeholder:text-tertiary focus:outline-none focus:border-accent"
-                />
-              )}
+              <input
+                type={field.fieldType === "date" || field.type === "date" ? "date" : "text"}
+                value={collectValues[field.id] ?? ""}
+                onChange={(e) => setCollectValues((v) => ({ ...v, [field.id]: e.target.value }))}
+                placeholder={field.name}
+                className="w-full h-[48px] rounded-2xl bg-white/[0.06] border border-white/5 px-4 text-white placeholder:text-white/20 focus:outline-none focus:border-mint/30 transition-colors"
+              />
             </div>
           ))}
 
-          {error && (
-            <p className="text-red text-sm">{error}</p>
-          )}
+          {error && <p className="text-red-400 text-[13px]">{error}</p>}
 
-          <p className="text-xs text-tertiary">By continuing, you accept the Terms of Service.</p>
+          <p className="text-[11px] text-white/25">By continuing, you accept the Terms of Service.</p>
 
           <button
             onClick={handleSubmitCollectData}
-            className="w-full h-14 rounded-2xl bg-accent text-white text-base font-semibold hover:bg-accent-hover transition-colors"
+            className="w-full h-[50px] rounded-2xl bg-mint text-mint-text text-[15px] font-semibold cursor-pointer"
           >
             Continue
           </button>
-          <button onClick={reset} className="w-full text-sm text-secondary">Cancel</button>
+          <button onClick={reset} className="w-full text-[13px] text-white/40 cursor-pointer">Cancel</button>
         </div>
       )}
 
+      {/* Fund Burner — Payment Summary */}
       {step === "fund_burner" && paymentInfo && (
-        <div className="space-y-4 text-center">
-          <p className="text-sm text-secondary">Payment to</p>
-          <p className="text-xl font-bold">{paymentInfo.merchant?.name ?? "Merchant"}</p>
-          <p className="text-3xl font-bold">
+        <div className="flex-1 flex flex-col items-center justify-center px-5 space-y-5">
+          <p className="text-[13px] text-white/40">Payment to</p>
+          <p className="text-[20px] font-bold text-white">{paymentInfo.merchant?.name ?? "Merchant"}</p>
+          <p className="text-[36px] font-bold text-white">
             ${formatTokenAmount(paymentInfo.amount?.value ?? "0", paymentInfo.amount?.display?.decimals ?? 2)}
           </p>
-          <div className="rounded-2xl bg-card p-4 text-left space-y-2">
-            <p className="text-xs text-secondary font-medium">How it works:</p>
-            <p className="text-xs text-tertiary">1. Your payment is routed privately</p>
-            <p className="text-xs text-tertiary">2. Transaction is signed securely</p>
-            <p className="text-xs text-tertiary">3. WalletConnect settles with the merchant</p>
-            <p className="text-xs text-tertiary">4. No on-chain link between you and the merchant</p>
+
+          <div className="w-full rounded-2xl bg-white/[0.04] p-4 space-y-2.5">
+            <p className="text-[11px] text-white/50 font-medium uppercase tracking-wider">How it works</p>
+            <p className="text-[12px] text-white/35">1. Your payment is routed privately</p>
+            <p className="text-[12px] text-white/35">2. Transaction is signed securely</p>
+            <p className="text-[12px] text-white/35">3. WalletConnect settles with the merchant</p>
+            <p className="text-[12px] text-white/35">4. No on-chain link between you and the merchant</p>
           </div>
+
           <button
-            onClick={handleFundBurner}
-            className="w-full h-14 rounded-2xl bg-accent text-white text-base font-semibold hover:bg-accent-hover transition-colors"
+            onClick={handleFundAndPay}
+            className="w-full h-[54px] rounded-full bg-mint text-mint-text text-[16px] font-semibold cursor-pointer"
           >
             Approve & Pay
           </button>
-          <button onClick={reset} className="text-sm text-secondary">Cancel</button>
+          <button onClick={reset} className="text-[13px] text-white/40 cursor-pointer">Cancel</button>
         </div>
       )}
 
-      {step === "funding" && (
-        <div className="flex flex-col items-center justify-center py-12 space-y-5">
-          <Spinner size={32} />
-          <p className="text-primary text-sm font-medium">Sending transaction privately...</p>
-          <div className="w-full max-w-xs space-y-3">
-            <StepRow label="Preparing private payment (passkey)" active done={false} />
-            <StepRow label="Waiting for confirmation" active={false} done={false} />
+      {/* Processing States */}
+      {(step === "funding" || step === "signing" || step === "confirming") && (
+        <div className="flex-1 flex flex-col items-center justify-center px-6">
+          {/* Animated rings */}
+          <div className="relative w-28 h-28 mb-8">
+            <div className="absolute inset-0 rounded-full border-2 border-mint/20 animate-[spin_8s_linear_infinite]" />
+            <div className="absolute inset-3 rounded-full border-2 border-transparent border-t-mint/40 border-r-mint/40 animate-[spin_3s_linear_infinite_reverse]" />
+            <div className="absolute inset-6 rounded-full border-2 border-transparent border-t-mint animate-[spin_1.5s_linear_infinite]" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-3 h-3 rounded-full bg-mint animate-pulse" />
+            </div>
           </div>
-        </div>
-      )}
 
-      {step === "options" && (
-        <div className="space-y-3">
-          <p className="text-sm text-secondary">Select payment method:</p>
-          {options.map((opt) => (
-            <button
-              key={opt.id}
-              onClick={() => handleSelectOption(opt)}
-              className="w-full flex items-center justify-between p-4 rounded-2xl bg-elevated hover:bg-line transition-colors text-left"
-            >
-              <div>
-                <p className="font-medium text-primary">
-                  {opt.amount?.display?.assetSymbol ?? "Token"} on{" "}
-                  {opt.amount?.display?.networkName ?? "Unknown"}
-                </p>
-                <p className="text-xs text-tertiary">~{opt.etaS ?? "?"}s</p>
+          <p className="text-white text-[16px] font-semibold mb-1">
+            {step === "funding" && "Sending payment..."}
+            {step === "signing" && "Signing privately..."}
+            {step === "confirming" && "Confirming with merchant..."}
+          </p>
+          <p className="text-white/25 text-[13px] mb-8">This may take a moment</p>
+
+          <div className="w-full max-w-[260px]">
+            <div className="relative pl-8">
+              <div className="absolute left-[11px] top-1 bottom-1 w-[2px] bg-white/5" />
+              <div className="space-y-5">
+                <ProcessStep label="Send USDC" done={step !== "funding"} active={step === "funding"} />
+                <ProcessStep label="Sign transaction" done={step === "confirming"} active={step === "signing"} />
+                <ProcessStep label="Confirm with merchant" done={false} active={step === "confirming"} />
               </div>
-              <p className="font-mono text-sm text-primary">
-                {formatTokenAmount(opt.amount?.value ?? "0", opt.amount?.display?.decimals ?? 2)}
-              </p>
-            </button>
-          ))}
-          <button onClick={reset} className="w-full text-sm text-secondary">Cancel</button>
-        </div>
-      )}
-
-      {step === "signing" && (
-        <div className="flex flex-col items-center justify-center py-12 space-y-5">
-          <Spinner size={32} />
-          <p className="text-primary text-sm font-medium">Signing payment privately...</p>
-          <div className="w-full max-w-xs space-y-3">
-            <StepRow label="Preparing payment" done active={false} />
-            <StepRow label="Signing transaction" active done={false} />
-            <StepRow label="Confirming with merchant" active={false} done={false} />
+            </div>
           </div>
         </div>
       )}
 
-      {step === "confirming" && (
-        <div className="flex flex-col items-center justify-center py-12 space-y-5">
-          <Spinner size={32} />
-          <p className="text-primary text-sm font-medium">Confirming with merchant...</p>
-          <div className="w-full max-w-xs space-y-3">
-            <StepRow label="Preparing payment" done active={false} />
-            <StepRow label="Signing transaction" done active={false} />
-            <StepRow label="Confirming with merchant" active done={false} />
-          </div>
-        </div>
-      )}
-
+      {/* Success */}
       {step === "success" && (
-        <div className="flex flex-col items-center justify-center py-16 space-y-4 text-center">
-          <div className="w-16 h-16 rounded-full bg-green/10 text-green flex items-center justify-center text-3xl">✓</div>
-          <p className="text-xl font-bold">Paid!</p>
-          <p className="text-secondary text-sm">Payment settled privately</p>
-          {txResult && <p className="text-xs text-tertiary font-mono break-all">ID: {txResult}</p>}
-          <button onClick={() => router.push("/dashboard")} className="mt-4 h-12 px-8 rounded-2xl bg-elevated text-primary font-medium text-sm">
+        <div className="flex-1 flex flex-col items-center justify-center px-6 space-y-4">
+          <div className="w-16 h-16 rounded-full bg-mint/15 text-mint flex items-center justify-center text-[28px] font-bold">
+            ✓
+          </div>
+          <p className="text-[22px] font-bold text-white">Paid!</p>
+          <p className="text-white/40 text-[14px]">Payment settled privately</p>
+          {txResult && (
+            <p className="text-[11px] text-white/20 font-mono break-all max-w-[280px] text-center">
+              ID: {txResult}
+            </p>
+          )}
+          <button
+            onClick={() => router.push("/dashboard")}
+            className="mt-4 h-[48px] px-8 rounded-full bg-white/[0.06] text-white text-[14px] font-medium cursor-pointer hover:bg-white/[0.1] transition-colors"
+          >
             Done
           </button>
         </div>
       )}
 
+      {/* Error */}
       {step === "error" && (
-        <div className="flex flex-col items-center justify-center py-16 space-y-4 text-center">
-          <div className="w-16 h-16 rounded-full bg-red/10 text-red flex items-center justify-center text-3xl">✕</div>
-          <p className="text-xl font-bold">Failed</p>
-          <p className="text-red text-sm">{error}</p>
-          <button onClick={reset} className="mt-4 h-12 px-8 rounded-2xl bg-elevated text-primary font-medium text-sm">
+        <div className="flex-1 flex flex-col items-center justify-center px-6 space-y-4">
+          <div className="w-16 h-16 rounded-full bg-red-500/15 text-red-400 flex items-center justify-center text-[28px]">
+            ✕
+          </div>
+          <p className="text-[22px] font-bold text-white">Failed</p>
+          <p className="text-red-400/80 text-[13px] text-center max-w-[280px]">{error}</p>
+          <button
+            onClick={reset}
+            className="mt-4 h-[48px] px-8 rounded-full bg-white/[0.06] text-white text-[14px] font-medium cursor-pointer hover:bg-white/[0.1] transition-colors"
+          >
             Try Again
           </button>
         </div>
@@ -485,24 +544,21 @@ export default function PayPage() {
   );
 }
 
-function CenterSpinner({ text }: { text: string }) {
+function ProcessStep({ label, done, active }: { label: string; done: boolean; active: boolean }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 space-y-3">
-      <Spinner size={32} />
-      <p className="text-secondary text-sm">{text}</p>
-    </div>
-  );
-}
-
-function StepRow({ label, done, active }: { label: string; done: boolean; active: boolean }) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-        done ? "bg-green/20 text-green" : active ? "bg-accent/20 text-accent" : "bg-elevated text-tertiary"
+    <div className="flex items-center gap-3 relative">
+      <div className={`absolute -left-8 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold z-10 transition-all duration-500 ${
+        done
+          ? "bg-mint text-[#1a1a1a]"
+          : active
+            ? "bg-mint/20 text-mint ring-4 ring-mint/10 animate-pulse"
+            : "bg-white/8 text-white/20"
       }`}>
-        {done ? "✓" : "·"}
+        {done ? "✓" : active ? "●" : "○"}
       </div>
-      <span className={`text-sm ${active ? "text-primary font-medium" : done ? "text-green" : "text-tertiary"}`}>
+      <span className={`text-[14px] transition-all duration-300 ${
+        active ? "text-white font-semibold" : done ? "text-mint font-medium" : "text-white/20"
+      }`}>
         {label}
       </span>
     </div>
