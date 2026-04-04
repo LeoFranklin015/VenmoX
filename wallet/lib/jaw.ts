@@ -6,7 +6,7 @@ const JAW_API_KEY = process.env.NEXT_PUBLIC_JAW_API_KEY!;
 export const BASE_MAINNET = 8453;
 export const BASE_SEPOLIA = 84532;
 
-// JAW's ERC-20 paymaster (gas sponsored via USDC or free on testnet)
+// JAW's built-in paymaster for gas sponsorship
 function getPaymasterUrl(chainId: number): string {
   return `https://api.justaname.id/proxy/v1/rpc/erc20-paymaster?chainId=${chainId}&api-key=${JAW_API_KEY}`;
 }
