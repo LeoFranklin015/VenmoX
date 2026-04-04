@@ -20,104 +20,86 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "address required" }, { status: 400 });
   }
 
-  try {
-    const account = getAccount(address);
-    const balances: Array<{
-      token: string;
-      symbol: string;
-      amount: string;
-      formatted: string;
-      network: string;
-      type: string;
-    }> = [];
+  const balances: Array<{
+    token: string;
+    symbol: string;
+    amount: string;
+    formatted: string;
+    network: string;
+    type: string;
+  }> = [];
 
-    // --- Mainnet: USDC on Base ---
-    try {
-      const mainnetClient = createPublicClient({
+  // --- Mainnet: USDC on Base ---
+  // --- Testnet: USDC on Base Sepolia ---
+  // Fetch both in parallel — these must always work even if DB is down
+  const [mainnetResult, testnetResult] = await Promise.allSettled([
+    (async () => {
+      const client = createPublicClient({
         chain: base,
         transport: http(BASE_MAINNET_RPC),
       });
-      const mainnetBal = await mainnetClient.readContract({
+      return client.readContract({
         address: MAINNET_USDC as `0x${string}`,
         abi: ERC20_ABI,
         functionName: "balanceOf",
         args: [address as `0x${string}`],
       });
-      balances.push({
-        token: MAINNET_USDC,
-        symbol: MAINNET_USDC_SYMBOL,
-        amount: mainnetBal.toString(),
-        formatted: formatTokenAmount(mainnetBal.toString(), MAINNET_USDC_DECIMALS),
-        network: "mainnet",
-        type: "onchain",
-      });
-    } catch {
-      balances.push({
-        token: MAINNET_USDC,
-        symbol: MAINNET_USDC_SYMBOL,
-        amount: "0",
-        formatted: "0",
-        network: "mainnet",
-        type: "onchain",
-      });
-    }
-
-    // --- Testnet: USDC on Base Sepolia ---
-    try {
-      const testnetClient = createPublicClient({
+    })(),
+    (async () => {
+      const client = createPublicClient({
         chain: baseSepolia,
         transport: http(BASE_SEPOLIA_RPC),
       });
-      const testnetBal = await testnetClient.readContract({
+      return client.readContract({
         address: TESTNET_USDC as `0x${string}`,
         abi: ERC20_ABI,
         functionName: "balanceOf",
         args: [address as `0x${string}`],
       });
-      balances.push({
-        token: TESTNET_USDC,
-        symbol: TESTNET_USDC_SYMBOL,
-        amount: testnetBal.toString(),
-        formatted: formatTokenAmount(testnetBal.toString(), TESTNET_USDC_DECIMALS),
-        network: "testnet",
-        type: "onchain",
-      });
-    } catch {
-      balances.push({
-        token: TESTNET_USDC,
-        symbol: TESTNET_USDC_SYMBOL,
-        amount: "0",
-        formatted: "0",
-        network: "testnet",
-        type: "onchain",
-      });
-    }
+    })(),
+  ]);
 
-    // --- Testnet: Unlink pool balance (USDC) ---
+  const mainnetBal = mainnetResult.status === "fulfilled" ? mainnetResult.value.toString() : "0";
+  balances.push({
+    token: MAINNET_USDC,
+    symbol: MAINNET_USDC_SYMBOL,
+    amount: mainnetBal,
+    formatted: formatTokenAmount(mainnetBal, MAINNET_USDC_DECIMALS),
+    network: "mainnet",
+    type: "onchain",
+  });
+
+  const testnetBal = testnetResult.status === "fulfilled" ? testnetResult.value.toString() : "0";
+  balances.push({
+    token: TESTNET_USDC,
+    symbol: TESTNET_USDC_SYMBOL,
+    amount: testnetBal,
+    formatted: formatTokenAmount(testnetBal, TESTNET_USDC_DECIMALS),
+    network: "testnet",
+    type: "onchain",
+  });
+
+  // --- Testnet: Unlink pool balance (USDC) ---
+  // DB-dependent — isolated so it can't break the on-chain balances above
+  try {
+    const account = getAccount(address);
     if (account?.unlink_mnemonic) {
-      try {
-        const client = await createUnlinkClient(account.unlink_mnemonic);
-        await client.ensureRegistered();
-        const { balances: poolBalances } = await client.getBalances({ token: TESTNET_USDC });
-        const poolBal = poolBalances.find((b) => b.token === TESTNET_USDC);
-        balances.push({
-          token: TESTNET_USDC,
-          symbol: TESTNET_USDC_SYMBOL,
-          amount: poolBal?.amount ?? "0",
-          formatted: formatTokenAmount(poolBal?.amount ?? "0", TESTNET_USDC_DECIMALS),
-          network: "testnet",
-          type: "pool",
-        });
-      } catch {
-        // skip
-      }
+      const unlinkClient = await createUnlinkClient(account.unlink_mnemonic);
+      await unlinkClient.ensureRegistered();
+      const { balances: poolBalances } = await unlinkClient.getBalances({ token: TESTNET_USDC });
+      const poolBal = poolBalances.find((b) => b.token === TESTNET_USDC);
+      balances.push({
+        token: TESTNET_USDC,
+        symbol: TESTNET_USDC_SYMBOL,
+        amount: poolBal?.amount ?? "0",
+        formatted: formatTokenAmount(poolBal?.amount ?? "0", TESTNET_USDC_DECIMALS),
+        network: "testnet",
+        type: "pool",
+      });
     }
-
-    return NextResponse.json({ balances });
-  } catch (e: unknown) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Unknown error" },
-      { status: 500 }
-    );
+  } catch {
+    // DB or Unlink unavailable — skip pool balance silently
   }
+
+  return NextResponse.json({ balances });
 }
