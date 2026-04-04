@@ -3,43 +3,43 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
-import { Home, Send, Zap, Clock, ShieldCheck } from "lucide-react";
+import { Home, Send, RefreshCw, Clock } from "lucide-react";
 
 export function BottomNav() {
   const pathname = usePathname();
   const { network } = useWallet();
 
-  const actionTab = network === "testnet"
-    ? { href: "/dashboard/send", label: "Send", Icon: Send }
-    : { href: "/dashboard/pay", label: "Pay", Icon: Zap };
-
   const TABS = [
-    { href: "/dashboard", label: "Home", Icon: Home },
-    actionTab,
-    { href: "/dashboard/subscriptions", label: "Subs", Icon: ShieldCheck },
-    { href: "/dashboard/history", label: "Activity", Icon: Clock },
+    { href: "/dashboard", Icon: Home },
+    { href: network === "testnet" ? "/dashboard/send" : "/dashboard/pay", Icon: Send },
+    { href: "/dashboard/subscriptions", Icon: RefreshCw },
+    { href: "/dashboard/history", Icon: Clock },
   ];
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-50 bg-[#1c1c1e] border-t border-white/5"
+    <nav
+      className="fixed bottom-0 inset-x-0 z-50"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="flex justify-around items-center h-[52px] max-w-lg mx-auto">
-        {TABS.map((tab) => {
-          const active = pathname === tab.href;
-          return (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              className={`flex flex-col items-center gap-0.5 cursor-pointer transition-colors ${
-                active ? "text-[#8dd885]" : "text-white/25"
-              }`}
-            >
-              <tab.Icon size={20} strokeWidth={active ? 2.2 : 1.5} />
-              <span className="text-[10px] font-medium">{tab.label}</span>
-            </Link>
-          );
-        })}
+      <div className="flex justify-center pb-3 pt-2">
+        <div className="flex items-center gap-3 bg-[#2a2a2e] rounded-full px-3 py-2">
+          {TABS.map((tab) => {
+            const active = pathname === tab.href;
+            return (
+              <Link
+                key={tab.href}
+                href={tab.href}
+                className={`w-12 h-12 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                  active
+                    ? "bg-[#8dd885] text-[#1a1a1a]"
+                    : "text-white/30 hover:text-white/50"
+                }`}
+              >
+                <tab.Icon size={20} strokeWidth={active ? 2.2 : 1.5} />
+              </Link>
+            );
+          })}
+        </div>
       </div>
     </nav>
   );
