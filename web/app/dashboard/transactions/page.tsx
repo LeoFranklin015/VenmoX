@@ -14,6 +14,17 @@ type Transaction = {
   createdAt: string;
 };
 
+type SubCharge = {
+  _id: string;
+  planName: string;
+  planAmount: string;
+  planPeriod: string;
+  subscriber: string;
+  status: string;
+  lastChargedAt: string | null;
+  created_at: string;
+};
+
 const statusColors: Record<string, string> = {
   succeeded: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
   processing: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
@@ -21,13 +32,17 @@ const statusColors: Record<string, string> = {
   failed: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   expired: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500",
   cancelled: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-500",
+  active: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  revoked: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
 };
 
 export default function Transactions() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [subCharges, setSubCharges] = useState<SubCharge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
+  const [tab, setTab] = useState<"payments" | "subscriptions">("payments");
   const [cursor, setCursor] = useState<string | null>(null);
 
   async function loadTransactions(statusFilter?: string, pageCursor?: string) {
@@ -55,6 +70,35 @@ export default function Transactions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
+  useEffect(() => {
+    async function loadSubs() {
+      try {
+        const res = await fetch("/api/subscriptions");
+        const data = await res.json();
+        const allSubs: SubCharge[] = [];
+        for (const plan of data.plans || []) {
+          const detail = await fetch(`/api/subscriptions/${plan._id}`).then((r) => r.json());
+          for (const sub of detail.subscribers || []) {
+            allSubs.push({
+              _id: sub._id,
+              planName: plan.name,
+              planAmount: plan.amount,
+              planPeriod: plan.period,
+              subscriber: sub.subscriber,
+              status: sub.status,
+              lastChargedAt: sub.lastChargedAt,
+              created_at: sub.created_at,
+            });
+          }
+        }
+        setSubCharges(allSubs);
+      } catch {
+        // Non-critical
+      }
+    }
+    loadSubs();
+  }, []);
+
   function shortenAddress(caip10?: string) {
     if (!caip10) return "—";
     const parts = caip10.split(":");
@@ -69,6 +113,20 @@ export default function Transactions() {
         <p className="text-zinc-500 text-sm mt-1">View all payment transactions</p>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 mb-6 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-1 w-fit">
+        <button onClick={() => setTab("payments")}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === "payments" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500"}`}>
+          Payments
+        </button>
+        <button onClick={() => setTab("subscriptions")}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === "subscriptions" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500"}`}>
+          Subscriptions {subCharges.length > 0 && <span className="ml-1 text-xs text-zinc-400">({subCharges.length})</span>}
+        </button>
+      </div>
+
+      {tab === "payments" && (
+      <>
       {/* Filters */}
       <div className="flex gap-2 mb-6">
         {["all", "succeeded", "processing", "requires_action", "failed", "expired"].map((s) => (
@@ -134,6 +192,44 @@ export default function Transactions() {
           </div>
         )}
       </div>
+      </>
+      )}
+
+      {tab === "subscriptions" && (
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <th className="text-left text-xs font-medium text-zinc-500 uppercase tracking-wide px-5 py-3">Plan</th>
+                <th className="text-left text-xs font-medium text-zinc-500 uppercase tracking-wide px-5 py-3">Amount</th>
+                <th className="text-left text-xs font-medium text-zinc-500 uppercase tracking-wide px-5 py-3">Subscriber</th>
+                <th className="text-left text-xs font-medium text-zinc-500 uppercase tracking-wide px-5 py-3">Status</th>
+                <th className="text-left text-xs font-medium text-zinc-500 uppercase tracking-wide px-5 py-3">Last Charged</th>
+                <th className="text-left text-xs font-medium text-zinc-500 uppercase tracking-wide px-5 py-3">Since</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+              {subCharges.map((sub) => (
+                <tr key={sub._id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                  <td className="px-5 py-4 text-sm font-medium text-zinc-900 dark:text-white">{sub.planName}</td>
+                  <td className="px-5 py-4 text-sm text-zinc-900 dark:text-white">{sub.planAmount} USDC / {sub.planPeriod}</td>
+                  <td className="px-5 py-4 text-sm font-mono text-zinc-500">{sub.subscriber.slice(0, 6)}...{sub.subscriber.slice(-4)}</td>
+                  <td className="px-5 py-4">
+                    <span className={`inline-flex px-2 py-0.5 rounded-md text-xs font-medium ${statusColors[sub.status] || "bg-zinc-100 text-zinc-500"}`}>
+                      {sub.status}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-zinc-500">{sub.lastChargedAt ? new Date(sub.lastChargedAt).toLocaleDateString() : "Never"}</td>
+                  <td className="px-5 py-4 text-sm text-zinc-500">{new Date(sub.created_at).toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {subCharges.length === 0 && (
+            <div className="px-5 py-12 text-center text-sm text-zinc-400">No subscribers yet.</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

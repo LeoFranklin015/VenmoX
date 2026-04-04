@@ -6,7 +6,7 @@ import { useWallet } from "@/lib/wallet-context";
 import { shortenAddress } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
 import { TxItem } from "@/components/TxItem";
-import { Copy, Check, Send, Zap, ArrowDownLeft, ChevronRight } from "lucide-react";
+import { Copy, Check, Send, Zap, ArrowDownLeft, ChevronRight, ShieldCheck } from "lucide-react";
 
 interface Balance {
   token: string; symbol: string; amount: string; formatted: string; network: string; type: string;
@@ -134,6 +134,7 @@ export default function DashboardHome() {
           <ActionCard icon={<Zap size={18} />} label="Pay" sub="Merchant" onClick={() => router.push("/dashboard/pay")} />
         )}
         <ActionCard icon={<ArrowDownLeft size={18} />} label="Receive" sub="USDC" onClick={copyAddress} secondary />
+        <ActionCard icon={<ShieldCheck size={18} />} label="Subscriptions" sub="Manage" onClick={() => router.push("/dashboard/subscriptions")} secondary />
       </div>
 
       {/* Recent Activity */}

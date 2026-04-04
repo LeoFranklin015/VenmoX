@@ -161,3 +161,54 @@ export async function getTransactions(ownerAddress: string, limit = 50) {
     created_at: d.created_at as string,
   }));
 }
+
+// --- Subscription queries (shared collections with web app) ---
+
+export async function getPlanById(id: string) {
+  const d = await getDb();
+  return d.collection("subscription_plans").findOne({ _id: new ObjectId(id) });
+}
+
+export async function addSubscriber(planId: string, subscriber: string, permissionId: string) {
+  const d = await getDb();
+  await d.collection("subscribers").insertOne({
+    plan_id: planId,
+    subscriber,
+    permissionId,
+    status: "active",
+    lastChargedAt: null,
+    created_at: new Date().toISOString(),
+  });
+}
+
+export async function getMySubscriptions(subscriberAddress: string) {
+  const d = await getDb();
+  const subs = await d.collection("subscribers").find({ subscriber: subscriberAddress }).sort({ created_at: -1 }).toArray();
+  // Join with plan details
+  const results = [];
+  for (const sub of subs) {
+    const plan = await d.collection("subscription_plans").findOne({ _id: new ObjectId(sub.plan_id) });
+    results.push({
+      _id: sub._id.toString(),
+      planId: sub.plan_id,
+      name: plan?.name ?? "Unknown",
+      description: plan?.description ?? "",
+      amount: plan?.amount ?? "0",
+      period: plan?.period ?? "month",
+      spender: plan?.spender ?? "",
+      status: sub.status,
+      permissionId: sub.permissionId,
+      lastChargedAt: sub.lastChargedAt,
+      created_at: sub.created_at,
+    });
+  }
+  return results;
+}
+
+export async function revokeSubscriber(subscriberId: string) {
+  const d = await getDb();
+  await d.collection("subscribers").updateOne(
+    { _id: new ObjectId(subscriberId) },
+    { $set: { status: "revoked" } }
+  );
+}

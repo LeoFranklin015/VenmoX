@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
-import { Home, Send, Zap, Clock } from "lucide-react";
+import { Home, Send, Zap, Clock, ShieldCheck } from "lucide-react";
 
 export function BottomNav() {
   const pathname = usePathname();
@@ -16,6 +16,7 @@ export function BottomNav() {
   const TABS = [
     { href: "/dashboard", label: "Home", Icon: Home },
     actionTab,
+    { href: "/dashboard/subscriptions", label: "Subs", Icon: ShieldCheck },
     { href: "/dashboard/history", label: "Activity", Icon: Clock },
   ];
 
