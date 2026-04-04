@@ -25,25 +25,25 @@ export function TxItem({ type, status, amount, createdAt }: TxItemProps) {
   const isPending = ["pending", "processing", "signing"].includes(status);
 
   return (
-    <div className="flex items-center justify-between py-4">
+    <div className="flex items-center justify-between py-3.5">
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-elevated flex items-center justify-center">
+        <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center">
           {isOutgoing ? (
-            <ArrowUpRight size={16} className="text-secondary" />
+            <ArrowUpRight size={15} className="text-white/40" />
           ) : (
-            <ArrowDownLeft size={16} className="text-mint" />
+            <ArrowDownLeft size={15} className="text-[#8dd885]" />
           )}
         </div>
         <div>
-          <p className="text-[14px] font-medium text-primary">{label}</p>
-          <p className="text-[11px] text-tertiary mt-0.5">
+          <p className="text-[13px] font-medium text-white">{label}</p>
+          <p className="text-[10px] text-white/25 mt-0.5">
             {isPending ? status : timeAgo(createdAt)}
           </p>
         </div>
       </div>
       {amount && (
-        <p className={`text-[14px] font-semibold tabular-nums ${
-          isOutgoing ? "text-primary" : "text-mint"
+        <p className={`text-[13px] font-semibold tabular-nums ${
+          isOutgoing ? "text-white" : "text-[#8dd885]"
         }`}>
           {isOutgoing ? "-" : "+"}{amount}
         </p>

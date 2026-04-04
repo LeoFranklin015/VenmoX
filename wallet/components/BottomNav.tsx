@@ -20,7 +20,7 @@ export function BottomNav() {
   ];
 
   return (
-    <nav className="fixed bottom-0 inset-x-0 z-50 bg-card border-t border-line">
+    <nav className="fixed bottom-0 inset-x-0 z-50 bg-[#1c1c1e] border-t border-white/5">
       <div className="flex justify-around items-center h-[56px] max-w-lg mx-auto pb-[env(safe-area-inset-bottom)]">
         {TABS.map((tab) => {
           const active = pathname === tab.href;
@@ -29,7 +29,7 @@ export function BottomNav() {
               key={tab.href}
               href={tab.href}
               className={`flex flex-col items-center gap-0.5 cursor-pointer transition-colors ${
-                active ? "text-mint" : "text-tertiary"
+                active ? "text-[#8dd885]" : "text-white/25"
               }`}
             >
               <tab.Icon size={20} strokeWidth={active ? 2.2 : 1.5} />
