@@ -1,8 +1,10 @@
 const WC_PAY_API = "https://api.pay.walletconnect.org/v1/gateway";
 
 function headers() {
+  // Gateway API key — falls back to project ID if not set separately
+  const apiKey = process.env.WALLETCONNECT_API_KEY || process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";
   return {
-    "Api-Key": process.env.WALLETCONNECT_API_KEY || "",
+    "Api-Key": apiKey,
     "Content-Type": "application/json",
   };
 }

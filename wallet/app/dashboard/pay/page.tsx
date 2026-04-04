@@ -3,8 +3,8 @@
 import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
-import { parsePaymentLink } from "@/lib/walletconnect/parseLink";
 import { QRScanner } from "@/components/QRScanner";
+import { getPayClient } from "@/lib/walletconnect-pay";
 import { Spinner } from "@/components/Spinner";
 import { formatTokenAmount } from "@/lib/format";
 import { ArrowLeft, ScanLine, Keyboard } from "lucide-react";
@@ -30,12 +30,6 @@ interface CollectField {
   fieldType?: string;
 }
 
-function decodeHexAction(hex: string) {
-  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-  const json = Buffer.from(clean, "hex").toString("utf8");
-  return JSON.parse(json);
-}
-
 export default function PayPage() {
   const { account, address } = useWallet();
   const router = useRouter();
@@ -46,23 +40,17 @@ export default function PayPage() {
   const [error, setError] = useState<string | null>(null);
   const [txResult, setTxResult] = useState<string | null>(null);
 
-  // Payment state
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [paymentInfo, setPaymentInfo] = useState<any>(null);
   const [burnerAddress, setBurnerAddress] = useState<string | null>(null);
 
-  // Collect data state
   const [collectFields, setCollectFields] = useState<CollectField[]>([]);
   const [collectValues, setCollectValues] = useState<Record<string, string>>({});
 
-  // Persist across steps
   const pendingRef = useRef<{
     paymentId: string;
     paymentLink: string;
     burnerAddress: string;
-    optionId: string | null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    actions: any[] | null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     collectedData: any;
   } | null>(null);
@@ -90,32 +78,31 @@ export default function PayPage() {
     ];
   }
 
-  // Entry point — QR scan or paste
+  // Entry — QR scan or paste
   const handleScanOrPaste = useCallback(
     async (raw: string) => {
       if (!address) return;
       setError(null);
 
-      const parsed = parsePaymentLink(raw);
-      if (!parsed) {
+      const paymentLink = raw.trim();
+      if (!paymentLink) {
         setError("Invalid QR code or payment link");
         return;
       }
 
-      const { paymentId } = parsed;
       setStep("fetching");
 
       try {
-        // Fetch payment info using main address
-        const optionsRes = await fetch("/api/pay/options", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paymentId, accounts: getCaip10(address) }),
+        const client = getPayClient();
+        const result = await client.getPaymentOptions({
+          paymentLink,
+          accounts: getCaip10(address),
+          includePaymentInfo: true,
         });
-        const optionsData = await optionsRes.json();
-        if (!optionsRes.ok) throw new Error(optionsData.error || "Failed to fetch payment");
 
-        setPaymentInfo(optionsData.info ?? null);
+        console.log("[pay] getPaymentOptions:", JSON.stringify(result, null, 2));
+
+        setPaymentInfo(result.info ?? null);
 
         // Create burner wallet
         const burnerRes = await fetch("/api/burner", {
@@ -128,23 +115,26 @@ export default function PayPage() {
 
         setBurnerAddress(burnerData.burnerAddress);
         pendingRef.current = {
-          paymentId,
-          paymentLink: raw.trim(),
+          paymentId: result.paymentId,
+          paymentLink,
           burnerAddress: burnerData.burnerAddress,
-          optionId: null,
-          actions: null,
           collectedData: null,
         };
 
         // Check collectData
-        const option = optionsData.options?.[0];
-        if (option?.collectData?.fields?.length > 0) {
-          setCollectFields(option.collectData.fields);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const topCollect = (result as any).collectData;
+        const optionCollect = result.options?.[0]?.collectData;
+        const collect = topCollect ?? optionCollect;
+
+        if (collect?.fields?.length > 0) {
+          setCollectFields(collect.fields);
           setStep("collect_data");
         } else {
           setStep("fund_burner");
         }
       } catch (e: unknown) {
+        console.error("[pay] handleScanOrPaste error:", e);
         setError(e instanceof Error ? e.message : "Failed to fetch payment");
         setStep("error");
       }
@@ -162,16 +152,15 @@ export default function PayPage() {
     setError(null);
 
     if (pendingRef.current) {
-      const fields = [
-        ...collectFields.map((f) => ({ ...f, value: collectValues[f.id] ?? "" })),
-        { type: "boolean", id: "tosConfirmed", name: "Terms of Service", required: true, value: "true" },
+      pendingRef.current.collectedData = [
+        ...collectFields.map((f) => ({ id: f.id, value: collectValues[f.id] ?? "" })),
+        { id: "tosConfirmed", value: "true" },
       ];
-      pendingRef.current.collectedData = { fields };
     }
     setStep("fund_burner");
   }
 
-  // Fund burner, re-fetch options, sign, confirm
+  // Fund burner → re-fetch options → sign → confirm
   async function handleFundAndPay() {
     if (!account || !pendingRef.current || !paymentInfo) return;
     setStep("funding");
@@ -179,8 +168,9 @@ export default function PayPage() {
 
     try {
       const pending = pendingRef.current;
+      const client = getPayClient();
 
-      // Calculate USDC amount from payment info
+      // Calculate USDC amount
       const amountValue = paymentInfo.amount?.value ?? "0";
       const decimals = paymentInfo.amount?.display?.decimals ?? 2;
       const padded = amountValue.padStart(decimals + 1, "0");
@@ -199,52 +189,31 @@ export default function PayPage() {
         { to: USDC_BASE as `0x${string}`, data: calldata },
       ]);
 
-      // Wait for confirmation
       await new Promise((r) => setTimeout(r, 10000));
 
-      // Re-fetch options with burner address (now has USDC)
-      const optionsRes = await fetch("/api/pay/options", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          paymentId: pending.paymentId,
-          accounts: getCaip10(pending.burnerAddress),
-        }),
+      // Re-fetch options with burner address
+      const result = await client.getPaymentOptions({
+        paymentLink: pending.paymentLink,
+        accounts: getCaip10(pending.burnerAddress),
+        includePaymentInfo: true,
       });
-      const optionsData = await optionsRes.json();
-      if (!optionsRes.ok) throw new Error(optionsData.error || "No options after funding");
 
-      const option = optionsData.options?.[0];
+      console.log("[pay] Re-fetch options:", JSON.stringify(result, null, 2));
+
+      const option = result.options?.[0];
       if (!option) throw new Error("No payment options available after funding");
 
-      // Decode hex-encoded actions from Gateway API
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const resolvedActions = option.actions.map((action: any) => {
-        if (action.type === "build" && action.data?.data) {
-          return decodeHexAction(action.data.data);
-        }
-        if (action.type === "walletRpc" && action.data) {
-          return typeof action.data === "string"
-            ? decodeHexAction(action.data)
-            : action.data;
-        }
-        return action;
-      });
-
-      pending.optionId = option.id;
-      pending.actions = resolvedActions;
-
-      // Sign with burner (server-side)
+      // Get actions to sign
       setStep("signing");
 
-      const signActions = resolvedActions.map((a: { chainId?: string; method?: string; params?: string }) => ({
-        walletRpc: {
-          chainId: a.chainId || "eip155:8453",
-          method: a.method || "eth_signTypedData_v4",
-          params: typeof a.params === "string" ? a.params : JSON.stringify(a.params),
-        },
-      }));
+      const actions = await client.getRequiredPaymentActions({
+        paymentId: pending.paymentId,
+        optionId: option.id,
+      });
 
+      console.log("[pay] Actions to sign:", actions.length);
+
+      // Server signs with burner key
       const signRes = await fetch("/api/burner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -252,58 +221,46 @@ export default function PayPage() {
           action: "sign",
           ownerAddress: address,
           burnerAddress: pending.burnerAddress,
-          actions: signActions,
+          actions,
         }),
       });
       const signData = await signRes.json();
       if (signData.error) throw new Error(signData.error);
 
-      // Confirm with Gateway API
+      // Confirm payment
       setStep("confirming");
 
-      const results = signData.signatures.map((sig: string) => ({
-        type: "walletRpc",
-        data: [sig],
-      }));
-
-      const confirmRes = await fetch("/api/pay/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          paymentId: pending.paymentId,
-          optionId: option.id,
-          results,
-          collectedData: pending.collectedData,
-        }),
-      });
-      let confirmData = await confirmRes.json();
-      if (!confirmRes.ok) throw new Error(confirmData.error || "Confirmation failed");
-
-      // Poll until final
-      while (!confirmData.isFinal) {
-        await new Promise((r) => setTimeout(r, confirmData.pollInMs || 2000));
-        const pollRes = await fetch("/api/pay/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            paymentId: pending.paymentId,
-            optionId: option.id,
-            results,
-            collectedData: pending.collectedData,
-          }),
-        });
-        confirmData = await pollRes.json();
-        if (!pollRes.ok) throw new Error(confirmData.error || "Polling failed");
+      const confirmParams: {
+        paymentId: string;
+        optionId: string;
+        signatures: string[];
+        collectedData?: { id: string; value: string }[];
+      } = {
+        paymentId: pending.paymentId,
+        optionId: option.id,
+        signatures: signData.signatures,
+      };
+      if (pending.collectedData?.length > 0) {
+        confirmParams.collectedData = pending.collectedData;
       }
 
-      if (confirmData.status === "succeeded") {
-        setTxResult(pending.paymentId);
+      let confirmResult = await client.confirmPayment(confirmParams);
+      console.log("[pay] Confirm:", confirmResult.status, "isFinal:", confirmResult.isFinal);
+
+      while (!confirmResult.isFinal && confirmResult.pollInMs) {
+        await new Promise((r) => setTimeout(r, confirmResult.pollInMs!));
+        confirmResult = await client.confirmPayment(confirmParams);
+      }
+
+      if (confirmResult.status === "succeeded") {
+        setTxResult(confirmResult.info?.txId ?? pending.paymentId);
         setStep("success");
       } else {
-        setError(`Payment ${confirmData.status}`);
+        setError(`Payment ${confirmResult.status}`);
         setStep("error");
       }
     } catch (e: unknown) {
+      console.error("[pay] handleFundAndPay error:", e);
       setError(e instanceof Error ? e.message : "Payment failed");
       setStep("error");
     }
@@ -340,7 +297,6 @@ export default function PayPage() {
                   onScan={handleScanOrPaste}
                   onError={(err) => setError(err)}
                 />
-                {/* Scanner overlay */}
                 <div className="absolute inset-0 pointer-events-none">
                   <div className="absolute inset-[15%] border-2 border-white/20 rounded-2xl" />
                 </div>
@@ -429,7 +385,6 @@ export default function PayPage() {
           ))}
 
           {error && <p className="text-red-400 text-[13px]">{error}</p>}
-
           <p className="text-[11px] text-white/25">By continuing, you accept the Terms of Service.</p>
 
           <button
@@ -442,7 +397,7 @@ export default function PayPage() {
         </div>
       )}
 
-      {/* Fund Burner — Payment Summary */}
+      {/* Fund Burner */}
       {step === "fund_burner" && paymentInfo && (
         <div className="flex-1 flex flex-col items-center justify-center px-5 space-y-5">
           <p className="text-[13px] text-white/40">Payment to</p>
@@ -469,10 +424,9 @@ export default function PayPage() {
         </div>
       )}
 
-      {/* Processing States */}
+      {/* Processing */}
       {(step === "funding" || step === "signing" || step === "confirming") && (
         <div className="flex-1 flex flex-col items-center justify-center px-6">
-          {/* Animated rings */}
           <div className="relative w-28 h-28 mb-8">
             <div className="absolute inset-0 rounded-full border-2 border-mint/20 animate-[spin_8s_linear_infinite]" />
             <div className="absolute inset-3 rounded-full border-2 border-transparent border-t-mint/40 border-r-mint/40 animate-[spin_3s_linear_infinite_reverse]" />
@@ -505,15 +459,11 @@ export default function PayPage() {
       {/* Success */}
       {step === "success" && (
         <div className="flex-1 flex flex-col items-center justify-center px-6 space-y-4">
-          <div className="w-16 h-16 rounded-full bg-mint/15 text-mint flex items-center justify-center text-[28px] font-bold">
-            ✓
-          </div>
+          <div className="w-16 h-16 rounded-full bg-mint/15 text-mint flex items-center justify-center text-[28px] font-bold">✓</div>
           <p className="text-[22px] font-bold text-white">Paid!</p>
           <p className="text-white/40 text-[14px]">Payment settled privately</p>
           {txResult && (
-            <p className="text-[11px] text-white/20 font-mono break-all max-w-[280px] text-center">
-              ID: {txResult}
-            </p>
+            <p className="text-[11px] text-white/20 font-mono break-all max-w-[280px] text-center">ID: {txResult}</p>
           )}
           <button
             onClick={() => router.push("/dashboard")}
@@ -527,9 +477,7 @@ export default function PayPage() {
       {/* Error */}
       {step === "error" && (
         <div className="flex-1 flex flex-col items-center justify-center px-6 space-y-4">
-          <div className="w-16 h-16 rounded-full bg-red-500/15 text-red-400 flex items-center justify-center text-[28px]">
-            ✕
-          </div>
+          <div className="w-16 h-16 rounded-full bg-red-500/15 text-red-400 flex items-center justify-center text-[28px]">✕</div>
           <p className="text-[22px] font-bold text-white">Failed</p>
           <p className="text-red-400/80 text-[13px] text-center max-w-[280px]">{error}</p>
           <button

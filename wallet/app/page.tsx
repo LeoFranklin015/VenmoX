@@ -21,12 +21,10 @@ export default function AuthPage() {
   async function handleCreate() {
     if (!username.trim()) return;
     await create(username.trim());
-    router.replace("/dashboard");
   }
 
   async function handleLogin(credentialId?: string) {
     await login(credentialId);
-    router.replace("/dashboard");
   }
 
   return (
@@ -60,9 +58,10 @@ export default function AuthPage() {
               onClick={() =>
                 storedAccounts.length > 0 ? setMode("accounts") : handleLogin()
               }
-              className="w-full h-[56px] rounded-full border-2 border-white/40 text-[#1a1a1a] text-[16px] font-semibold active:scale-[0.98] transition-all cursor-pointer"
+              disabled={loading}
+              className="w-full h-[56px] rounded-full border-2 border-white/40 text-[#1a1a1a] text-[16px] font-semibold active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center"
             >
-              Sign In
+              {loading ? <Spinner size={18} /> : "Sign In"}
             </button>
           </div>
         )}

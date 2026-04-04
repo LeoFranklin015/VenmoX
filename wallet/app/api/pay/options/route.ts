@@ -9,10 +9,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    console.log("[pay/options] paymentId:", paymentId, "accounts:", accounts.length);
     const data = await getPaymentOptions(paymentId, accounts);
+    console.log("[pay/options] Got", data.options?.length ?? 0, "options");
     return NextResponse.json(data);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to get options";
+    console.error("[pay/options] Error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
