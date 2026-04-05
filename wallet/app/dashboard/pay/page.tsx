@@ -15,7 +15,7 @@ type PayStep =
   | "scan"
   | "fetching"
   | "collect_data"
-  | "fund_burner"
+  | "review"
   | "funding"
   | "signing"
   | "confirming"
@@ -131,7 +131,7 @@ export default function PayPage() {
           setCollectFields(collect.fields);
           setStep("collect_data");
         } else {
-          setStep("fund_burner");
+          setStep("review");
         }
       } catch (e: unknown) {
         console.error("[pay] handleScanOrPaste error:", e);
@@ -157,7 +157,7 @@ export default function PayPage() {
         { id: "tosConfirmed", value: "true" },
       ];
     }
-    setStep("fund_burner");
+    setStep("review");
   }
 
   // Fund burner → re-fetch options → sign → confirm
@@ -397,8 +397,8 @@ export default function PayPage() {
         </div>
       )}
 
-      {/* Fund Burner */}
-      {step === "fund_burner" && paymentInfo && (
+      {/* Review & Pay */}
+      {step === "review" && paymentInfo && (
         <div className="flex-1 flex flex-col items-center justify-center px-5 space-y-5">
           <p className="text-[13px] text-white/40">Payment to</p>
           <p className="text-[20px] font-bold text-white">{paymentInfo.merchant?.name ?? "Merchant"}</p>
@@ -408,7 +408,7 @@ export default function PayPage() {
 
           <div className="w-full rounded-2xl bg-white/[0.04] p-4 space-y-2.5">
             <p className="text-[11px] text-white/50 font-medium uppercase tracking-wider">How it works</p>
-            <p className="text-[12px] text-white/35">1. Your payment is routed privately</p>
+            <p className="text-[12px] text-white/35">1. USDC is routed through a privacy pool</p>
             <p className="text-[12px] text-white/35">2. Transaction is signed securely</p>
             <p className="text-[12px] text-white/35">3. WalletConnect settles with the merchant</p>
             <p className="text-[12px] text-white/35">4. No on-chain link between you and the merchant</p>
@@ -437,7 +437,7 @@ export default function PayPage() {
           </div>
 
           <p className="text-white text-[16px] font-semibold mb-1">
-            {step === "funding" && "Sending payment..."}
+            {step === "funding" && "Routing through privacy pool..."}
             {step === "signing" && "Signing privately..."}
             {step === "confirming" && "Confirming with merchant..."}
           </p>
@@ -447,7 +447,7 @@ export default function PayPage() {
             <div className="relative pl-8">
               <div className="absolute left-[11px] top-1 bottom-1 w-[2px] bg-white/5" />
               <div className="space-y-5">
-                <ProcessStep label="Send USDC" done={step !== "funding"} active={step === "funding"} />
+                <ProcessStep label="Route through privacy pool" done={step !== "funding"} active={step === "funding"} />
                 <ProcessStep label="Sign transaction" done={step === "confirming"} active={step === "signing"} />
                 <ProcessStep label="Confirm with merchant" done={false} active={step === "confirming"} />
               </div>
