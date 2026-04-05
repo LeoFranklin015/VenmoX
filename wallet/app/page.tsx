@@ -68,15 +68,21 @@ export default function AuthPage() {
 
         {mode === "create" && (
           <div className="space-y-3 animate-fade-up">
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-              placeholder="Choose a username"
-              className="w-full h-[56px] rounded-full bg-white/90 px-6 text-[15px] text-[#1a1a1a] placeholder:text-[#1a1a1a]/30 focus:outline-none focus:ring-2 focus:ring-white/50"
-              autoFocus
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, ""))}
+                onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                placeholder="Choose a username"
+                className="w-full h-[56px] rounded-full bg-white/90 px-6 pr-[120px] text-[15px] text-[#1a1a1a] placeholder:text-[#1a1a1a]/30 focus:outline-none focus:ring-2 focus:ring-white/50"
+                autoFocus
+              />
+              <span className="absolute right-5 top-1/2 -translate-y-1/2 text-[14px] text-[#1a1a1a]/40 font-medium">.cloak.eth</span>
+            </div>
+            {username && (
+              <p className="text-[12px] text-[#1a1a1a]/50 text-center">{username}.cloak.eth</p>
+            )}
             <button
               onClick={handleCreate}
               disabled={loading || !username.trim()}

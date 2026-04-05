@@ -117,6 +117,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setAddress(acc.address);
       setUsername(acc.getMetadata()?.username ?? name);
       await registerWithServer(acc.address, name);
+      // Claim ENS subname (non-blocking — don't fail wallet creation)
+      try {
+        console.log("[ens] Claiming subname:", name, "for address:", acc.address);
+        const { claimSubname } = await import("./ens");
+        const ensName = await claimSubname(name, acc.address);
+        console.log("[ens] Claimed:", ensName);
+      } catch (ensErr) {
+        console.error("[ens] Subname claim failed:", ensErr instanceof Error ? ensErr.message : ensErr);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create account");
     } finally {

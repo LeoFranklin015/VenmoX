@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/lib/wallet-context";
 import { AmountInput } from "@/components/AmountInput";
@@ -16,13 +16,45 @@ export default function SendPage() {
   const router = useRouter();
   const [amount, setAmount] = useState("");
   const [recipient, setRecipient] = useState("");
+  const [resolvedAddress, setResolvedAddress] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
   const [step, setStep] = useState<SendStep>("amount");
+  const resolveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ENS resolution — debounced
+  useEffect(() => {
+    setResolvedAddress(null);
+    if (resolveTimer.current) clearTimeout(resolveTimer.current);
+
+    const val = recipient.trim();
+    // If it's already a 0x address, no need to resolve
+    if (val.startsWith("0x") && val.length === 42) return;
+    // If it looks like an ENS name or plain username
+    if (val.length >= 2) {
+      resolveTimer.current = setTimeout(async () => {
+        setResolving(true);
+        try {
+          const { resolveEnsName } = await import("@/lib/ens");
+          const addr = await resolveEnsName(val);
+          setResolvedAddress(addr);
+        } catch {
+          setResolvedAddress(null);
+        } finally {
+          setResolving(false);
+        }
+      }, 500);
+    }
+    return () => { if (resolveTimer.current) clearTimeout(resolveTimer.current); };
+  }, [recipient]);
+
+  // Use resolved address or raw input for sending
+  const sendTo = resolvedAddress || recipient;
   const [statusMsg, setStatusMsg] = useState("");
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSend() {
-    if (!amount || !recipient || !address) return;
+    if (!amount || !sendTo || !address) return;
     setError(null);
 
     try {
@@ -68,7 +100,7 @@ export default function SendPage() {
         body: JSON.stringify({
           phase: "execute",
           ownerAddress: address,
-          recipientAddress: recipient,
+          recipientAddress: sendTo,
           amount,
           ephemeralAddress,
         }),
@@ -103,13 +135,28 @@ export default function SendPage() {
       {step === "amount" && (
         <div className="flex-1 flex flex-col px-5">
           {/* Recipient */}
-          <input
-            type="text"
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            placeholder="Recipient address 0x..."
-            className="w-full h-[46px] rounded-2xl bg-white/[0.06] border border-white/5 px-4 text-[13px] text-white font-mono placeholder:text-white/20 focus:outline-none focus:border-mint/30 transition-colors mt-1"
-          />
+          <div>
+            <input
+              type="text"
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value)}
+              placeholder="Address, ENS, or username"
+              className={`w-full h-[46px] rounded-2xl bg-white/[0.06] border px-4 text-[13px] text-white font-mono placeholder:text-white/20 focus:outline-none transition-colors mt-1 ${
+                resolvedAddress ? "border-mint/30" : "border-white/5 focus:border-mint/30"
+              }`}
+            />
+            {resolving && (
+              <p className="text-[11px] text-white/30 mt-1 pl-1">Resolving...</p>
+            )}
+            {resolvedAddress && !resolving && (
+              <p className="text-[11px] text-mint/70 mt-1 pl-1 font-mono">
+                {resolvedAddress.slice(0, 8)}...{resolvedAddress.slice(-6)}
+              </p>
+            )}
+            {!resolvedAddress && !resolving && recipient.trim() && !recipient.startsWith("0x") && recipient.length >= 2 && (
+              <p className="text-[11px] text-white/20 mt-1 pl-1">No address found</p>
+            )}
+          </div>
 
           {/* Amount — takes remaining space, centers */}
           <div className="flex-1 flex items-center justify-center">
@@ -126,7 +173,7 @@ export default function SendPage() {
           <div className="pt-3">
             <HoldButton
               onConfirm={handleSend}
-              disabled={!amount || parseFloat(amount) <= 0 || !recipient}
+              disabled={!amount || parseFloat(amount) <= 0 || !sendTo}
               label="Hold to send"
             />
           </div>
