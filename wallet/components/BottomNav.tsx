@@ -21,7 +21,7 @@ export function BottomNav() {
       className="fixed bottom-0 inset-x-0 z-50"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
-      <div className="flex justify-center pb-3 pt-2">
+      <div className="flex justify-center pb-5 pt-2">
         <div className="flex items-center gap-3 bg-[#2a2a2e] rounded-full px-3 py-2">
           {TABS.map((tab) => {
             const active = pathname === tab.href;

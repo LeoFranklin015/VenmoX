@@ -6,7 +6,7 @@ import { useWallet } from "@/lib/wallet-context";
 import { shortenAddress } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
 import { TxItem } from "@/components/TxItem";
-import { Copy, Check, Send, Zap, ArrowDownLeft, ChevronRight, ShieldCheck, X } from "lucide-react";
+import { Copy, Check, Send, Zap, ArrowDownLeft, ChevronRight, ShieldCheck, X, RotateCw } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
 interface Balance {
@@ -25,6 +25,7 @@ export default function DashboardHome() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [showReceive, setShowReceive] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (!address) return;
@@ -51,6 +52,18 @@ export default function DashboardHome() {
     navigator.clipboard.writeText(address!);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function refreshBalance() {
+    if (!address || refreshing) return;
+    setRefreshing(true);
+    const [balRes, txRes] = await Promise.all([
+      fetch(`/api/balance?address=${address}`).then((r) => r.json()),
+      fetch(`/api/history?address=${address}`).then((r) => r.json()),
+    ]);
+    setBalances(balRes.balances ?? []);
+    setTransactions(txRes.transactions ?? []);
+    setRefreshing(false);
   }
 
   function openReceive() {
@@ -128,6 +141,15 @@ export default function DashboardHome() {
                 + {poolBalance.formatted} {poolBalance.symbol} in pool
               </p>
             )}
+            <div className="flex justify-end mt-3">
+              <button
+                onClick={refreshBalance}
+                disabled={refreshing}
+                className="w-8 h-8 rounded-full bg-[#2d3a1f]/20 flex items-center justify-center cursor-pointer hover:bg-[#2d3a1f]/30 transition-colors disabled:opacity-50"
+              >
+                <RotateCw size={14} className={`text-mint-text/60 ${refreshing ? "animate-spin" : ""}`} />
+              </button>
+            </div>
           </>
         )}
       </div>
